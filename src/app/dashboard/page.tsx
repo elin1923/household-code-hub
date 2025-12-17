@@ -1,108 +1,96 @@
-import { supabaseAdmin } from "@/lib/supabase-admin";
-import { getCloudflareUser } from "@/lib/cf-access";
+"use client";
 
-export const runtime = "nodejs";
+import { useEffect, useState } from "react";
+import { supabase } from "@/lib/supabase-client";
 
-function isAllowed(email: string | null) {
-  const allow = (process.env.HOUSEHOLD_EMAIL_ALLOWLIST || "")
-    .split(",")
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean);
+type Code = {
+  id: string;
+  service: string;
+  code: string | null;
+  channel: string;
+  received_at: string;
+};
 
-  if (allow.length === 0) return true; // rely on Cloudflare Access policy only
-  return email ? allow.includes(email.toLowerCase()) : false;
-}
+export default function Dashboard() {
+  const [codes, setCodes] = useState<Code[]>([]);
+  const [loading, setLoading] = useState(true);
 
-export default async function Dashboard() {
-  const user = await getCloudflareUser();
-
-  // If Cloudflare Access is configured, requests without auth never reach here.
-  if (!user.email) {
-    return (
-      <main style={{ padding: 24 }}>
-        <h1>Unauthorized</h1>
-        <p>This app is protected by Cloudflare Access. Please sign in.</p>
-      </main>
-    );
+  async function loadCodes() {
+    setLoading(true);
+    const res = await fetch("/api/codes");
+    const json = await res.json();
+    setCodes(json.data ?? []);
+    setLoading(false);
   }
 
-  if (!isAllowed(user.email)) {
-    return (
-      <main style={{ padding: 24 }}>
-        <h1>Not allowed</h1>
-        <p>{user.email} is authenticated, but not on the household allowlist.</p>
-      </main>
-    );
-  }
+  // initial load
+  useEffect(() => {
+    loadCodes();
+  }, []);
 
-  const nowIso = new Date().toISOString();
+  // realtime refresh
+  useEffect(() => {
+    const channel = supabase
+      .channel("verification_codes")
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "verification_codes" },
+        () => loadCodes()
+      )
+      .subscribe();
 
-  const { data, error } = await supabaseAdmin
-    .from("verification_codes")
-    .select("*")
-    .gt("expires_at", nowIso)
-    .order("received_at", { ascending: false })
-    .limit(60);
-
-  if (error) {
-    return (
-      <main style={{ padding: 24 }}>
-        <h1>DB error</h1>
-        <pre style={{ whiteSpace: "pre-wrap" }}>{error.message}</pre>
-      </main>
-    );
-  }
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
 
   return (
-    <main style={{ padding: 24, maxWidth: 900, margin: "0 auto" }}>
-      <header style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-        <h1 style={{ margin: 0 }}>Verification Codes</h1>
-        <div style={{ opacity: 0.75 }}>Signed in as {user.email}</div>
-      </header>
+    <main className="min-h-screen bg-gray-50">
+      <div className="max-w-4xl mx-auto px-4 py-8">
+        {/* Header */}
+        <header className="flex items-center justify-between mb-6">
+          <h1 className="text-2xl font-semibold tracking-tight">
+            Verification Codes
+          </h1>
 
-      <p style={{ opacity: 0.7, marginTop: 10 }}>
-        Ingestion endpoints:
-        {" "}
-        <code>/api/ingest/gmail</code>
-        {" "}
-        (POST),
-        {" "}
-        <code>/api/ingest/sms/twilio</code>
-        {" "}
-        (POST, optional)
-      </p>
+          <button
+            onClick={loadCodes}
+            className="inline-flex items-center gap-2 rounded-lg border bg-white px-4 py-2 text-sm font-medium shadow-sm hover:bg-gray-100 active:scale-[0.98]"
+          >
+            🔄 Refresh
+          </button>
+        </header>
 
-      <div style={{ marginTop: 14, display: "grid", gap: 12 }}>
-        {(data ?? []).map((c: any) => (
-          <div key={c.id} style={{ border: "1px solid #ddd", borderRadius: 12, padding: 12 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-              <strong>{c.service}</strong>
-              <span style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 18 }}>
-                {c.code ?? "—"}
-              </span>
-            </div>
-            <div style={{ marginTop: 6, fontSize: 12, opacity: 0.75 }}>
-              {String(c.channel).toUpperCase()} • {new Date(c.received_at).toLocaleString()}
-            </div>
-            <details style={{ marginTop: 8 }}>
-              <summary style={{ cursor: "pointer", opacity: 0.8 }}>Details</summary>
-              <pre style={{ whiteSpace: "pre-wrap", fontSize: 12, opacity: 0.85, marginTop: 8 }}>
-{JSON.stringify(
-  {
-    sender: c.sender,
-    recipient: c.recipient,
-    subject: c.subject,
-    body: c.body
-  },
-  null,
-  2
-)}
-              </pre>
-            </details>
+        {/* Content */}
+        {loading ? (
+          <p className="text-sm text-gray-500">Loading codes…</p>
+        ) : codes.length === 0 ? (
+          <div className="rounded-xl border border-dashed bg-white p-8 text-center text-gray-500">
+            No active codes yet
           </div>
-        ))}
-        {(data ?? []).length === 0 && (
-          <div style={{ opacity: 0.75 }}>No active codes yet. Ingest Gmail or SMS and refresh.</div>
+        ) : (
+          <div className="grid gap-4">
+            {codes.map(c => (
+              <div
+                key={c.id}
+                className="flex items-center justify-between rounded-xl border bg-white p-5 shadow-sm"
+              >
+                <div className="space-y-1">
+                  <p className="font-medium text-gray-900">
+                    {c.service}
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    {new Date(c.received_at).toLocaleTimeString()} ·{" "}
+                    {c.channel.toUpperCase()}
+                  </p>
+                </div>
+
+                <div className="text-2xl font-mono font-semibold tracking-widest text-gray-900">
+                  {c.code ?? "—"}
+                </div>
+              </div>
+            ))}
+          </div>
         )}
       </div>
     </main>
