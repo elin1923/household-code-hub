@@ -1,36 +1,53 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Household Code Hub (Cloudflare Zero Trust + Supabase)
 
-## Getting Started
+Auth is handled by Cloudflare Access. The app itself does not implement login.
 
-First, run the development server:
+## Setup
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+1) Copy env file:
+- cp .env.local.example .env.local
+- Fill in values.
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+2) Create Supabase table:
+- Open Supabase -> SQL Editor
+- Paste scripts/supabase.sql
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+3) Run dev:
+- npm run dev
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Open http://localhost:3000 (will redirect to /dashboard)
 
-## Learn More
+## Cloudflare Zero Trust (Custom Domain)
+Goal: Put your custom domain in front of this app and require Access login.
 
-To learn more about Next.js, take a look at the following resources:
+### A) Local now (quick test): Cloudflare Tunnel
+Install cloudflared, then:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+cloudflared tunnel --url http://localhost:3000
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+This gives you a trycloudflare.com URL.
 
-## Deploy on Vercel
+### B) Custom domain (recommended)
+1) Add your domain to Cloudflare (nameservers)
+2) Create a Tunnel in Cloudflare Zero Trust -> Networks -> Tunnels
+3) Install cloudflared locally and login:
+   cloudflared tunnel login
+4) Create tunnel + route it to localhost:
+   cloudflared tunnel create codehub
+   cloudflared tunnel route dns codehub yourdomain.com
+5) Configure tunnel ingress to http://localhost:3000
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Then protect yourdomain.com with Access:
+Zero Trust -> Access -> Applications -> Add -> Self-hosted
+- Domain: yourdomain.com
+- Policy: allow only household emails (Google login or One-time PIN)
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Cloudflare will inject headers like:
+- CF-Access-Authenticated-User-Email
+- CF-Access-Jwt-Assertion
+
+The dashboard reads these headers.
+
+## Ingestion
+- Gmail: POST /api/ingest/gmail (pulls unread emails, stores codes, marks read)
+- Twilio inbound SMS (optional): POST /api/ingest/sms/twilio
